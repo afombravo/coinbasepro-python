@@ -39,6 +39,55 @@ class AuthenticatedClient(PublicClient):
         super(AuthenticatedClient, self).__init__(api_url)
         self.auth = CBProAuth(key, b64secret, passphrase)
         self.session = requests.Session()
+        
+    def get_fees(self):
+        """ Get information for the current volume and fees.
+
+        Returns:
+            dict: Fees information. Example::
+                                [
+                    {
+                        "maker_fee_rate": "0.0015",
+                        "taker_fee_rate": "0.0025",
+                        "usd_volume": "25000.00"
+                    }
+                ]
+        """
+        return self._send_message('get', '/fees')
+    
+    def get_banking(self):
+        """ Get a list of your payment methods.
+
+        Returns:
+            dict: Fees information. Example::
+                        [
+                    {
+                        "id": "bc6d7162-d984-5ffa-963c-a493b1c1370b",
+                        "type": "ach_bank_account",
+                        "name": "Bank of America - eBan... ********7134",
+                        "currency": "USD",
+                        "primary_buy": true,
+                        "primary_sell": true,
+                        "allow_buy": true,
+                        "allow_sell": true,
+                        "allow_deposit": true,
+                        "allow_withdraw": true,
+        """
+        return self._send_message('get', '/payment-methods')
+    
+    def portfolio_transfer(self,from_id=None,to_id=None,coin=None,amount=None):
+        
+        """ 
+        transfer between portfolios
+        """
+        
+        # Build params dict
+        params = {'from': from_id,
+                  'to': to_id,
+                  'currency': coin,
+                  'amount': str(amount)}
+        
+        return self._send_message('post', '/profiles/transfer', data=json.dumps(params))
 
     def get_account(self, account_id):
         """ Get information for a single account.
@@ -87,7 +136,7 @@ class AuthenticatedClient(PublicClient):
         * Additional info included in response for margin accounts.
         """
         return self.get_account('')
-
+    
     def get_account_history(self, account_id, **kwargs):
         """ List account activity. Account activity either increases or
         decreases your account balance.
@@ -173,34 +222,7 @@ class AuthenticatedClient(PublicClient):
         endpoint = '/accounts/{}/holds'.format(account_id)
         return self._send_paginated_message(endpoint, params=kwargs)
 
-
-    def convert_stablecoin(self, amount, from_currency, to_currency):
-        """ Convert stablecoin.
-
-            Args:
-                amount (Decimal): The amount to convert.
-                from_currency (str): Currency type (eg. 'USDC')
-                to_currency (str): Currency type (eg. 'USD').
-
-            Returns:
-                dict: Conversion details. Example::
-                    {
-                        "id": "8942caee-f9d5-4600-a894-4811268545db",
-                        "amount": "10000.00",
-                        "from_account_id": "7849cc79-8b01-4793-9345-bc6b5f08acce",
-                        "to_account_id": "105c3e58-0898-4106-8283-dc5781cda07b",
-                        "from": "USD",
-                        "to": "USDC"
-                    }
-
-            """
-        params = {'from': from_currency,
-                  'to': to_currency,
-                  'amount': amount}
-        return self._send_message('post', '/conversions', data=json.dumps(params))
-
-
-    def place_order(self, product_id, side, order_type=None, **kwargs):
+    def place_order(self, product_id, side, order_type, **kwargs):
         """ Place an order.
 
         The three order types (limit, market, and stop) can be placed using this
@@ -210,7 +232,7 @@ class AuthenticatedClient(PublicClient):
         Args:
             product_id (str): Product to order (eg. 'BTC-USD')
             side (str): Order side ('buy' or 'sell)
-            order_type (str): Order type ('limit', or 'market')
+            order_type (str): Order type ('limit', 'market', or 'stop')
             **client_oid (str): Order ID selected by you to identify your order.
                 This should be a UUID, which will be broadcast in the public
                 feed for `received` messages.
@@ -270,7 +292,7 @@ class AuthenticatedClient(PublicClient):
                                  '`IOC` or `FOK`')
 
         # Market and stop order checks
-        if order_type == 'market' or kwargs.get('stop'):
+        if order_type == 'market' or order_type == 'stop':
             if not (kwargs.get('size') is None) ^ (kwargs.get('funds') is None):
                 raise ValueError('Either `size` or `funds` must be specified '
                                  'for market/stop orders (but not both).')
@@ -419,7 +441,7 @@ class AuthenticatedClient(PublicClient):
 
         return self.place_order(**params)
 
-    def place_stop_order(self, product_id, stop_type, price, size=None, funds=None,
+    def place_stop_order(self, product_id, side, price, size=None, funds=None,
                          client_oid=None,
                          stp=None,
                          overdraft_enabled=None,
@@ -428,9 +450,7 @@ class AuthenticatedClient(PublicClient):
 
         Args:
             product_id (str): Product to order (eg. 'BTC-USD')
-            stop_type(str): Stop type ('entry' or 'loss')
-                      loss: Triggers when the last trade price changes to a value at or below the stop_price.
-                      entry: Triggers when the last trade price changes to a value at or above the stop_price
+            side (str): Order side ('buy' or 'sell)
             price (Decimal): Desired price at which the stop order triggers.
             size (Optional[Decimal]): Desired amount in crypto. Specify this or
                 `funds`.
@@ -450,20 +470,10 @@ class AuthenticatedClient(PublicClient):
             dict: Order details. See `place_order` for example.
 
         """
-
-        if stop_type == 'loss':
-            side = 'sell'
-        elif stop_type == 'entry':
-            side = 'buy'
-        else:
-            raise ValueError('Invalid stop_type for stop order: ' + stop_type)
-
         params = {'product_id': product_id,
                   'side': side,
                   'price': price,
-                  'order_type': None,
-                  'stop': stop_type,
-                  'stop_price': price,
+                  'order_type': 'stop',
                   'size': size,
                   'funds': funds,
                   'client_oid': client_oid,
@@ -1034,16 +1044,3 @@ class AuthenticatedClient(PublicClient):
 
         """
         return self._send_message('get', '/users/self/trailing-volume')
-
-    def get_fees(self):
-        """ Get your maker & taker fee rates and 30-day trailing volume.
-
-        Returns:
-            dict: Fee information and USD volume::
-                {
-                    "maker_fee_rate": "0.0015",
-                    "taker_fee_rate": "0.0025",
-                    "usd_volume": "25000.00"
-                }
-        """
-        return self._send_message('get', '/fees')
